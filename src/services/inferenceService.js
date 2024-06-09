@@ -35,8 +35,11 @@ async function run_model(model, input) {
         const outputs = await model.run({ images: input });
 
         console.log('Model inference successful');
-        console.log(outputs.output1)
-        return outputs.output0.data;
+
+        console.log("DIMMMM",outputs.output0.dims)
+        const output = outputs.output0.data;
+        const mask = outputs.output1;
+        return {output, mask}
     } catch (error) {
         console.error('Error running model inference:', error);
         throw error;
@@ -52,7 +55,7 @@ function process_output(output, img_width, img_height) {
             .map(col => [col, output[8400 * (col + 4) + index]])
             .reduce((accum, item) => item[1] > accum[1] ? item : accum, [0, 0]);
 
-        if (prob < 0.5) {
+        if (prob < 0.1) {
             continue;
         }
         const label = yolo_classes[class_id];
@@ -69,16 +72,19 @@ function process_output(output, img_width, img_height) {
     }
 
     boxes = boxes.sort((box1, box2) => box2[5] - box1[5]);
-    console.log("boxes", boxes)
+    console.log("boxessdd", boxes)
     const result = [];
+    const countClasses = new Array(15).fill(0);
     while (boxes.length > 0) {
         result.push(boxes[0]);
+        const classIndex = yolo_classes.indexOf(boxes[0][4]);
+        countClasses[classIndex]++;
         boxes = boxes.filter(box => iou(boxes[0], box) < 0.7);
     }
     console.log("result", result)
-    return result;
+    console.log("countClasses", countClasses);
+    return {result, countClasses};
 }
-
 
 function iou(box1, box2) {
     return intersection(box1, box2) / union(box1, box2);
@@ -106,7 +112,34 @@ async function predictImageSegmentation(model, image) {
     try {
         const [input, img_width, img_height] = await preprocessingImage(image);
         const rawOutput = await run_model(model, input);
-        return process_output(rawOutput, img_width, img_height,);
+        const {result, countClasses} = process_output(rawOutput.output, img_width, img_height);
+
+        let svgElements = '';
+        for (const [x1, y1, x2, y2, label, prob] of result) {
+            svgElements += `
+                <rect x="${x1}" y="${y1}" width="${x2-x1}" height="${y2-y1}" 
+                    style="fill:none;stroke:green;stroke-width:4" />
+                <text x="${x1}" y="${y1 - 5}" fill="white" font-size="16">${label}</text>
+            `;
+        }
+        const svgImage = `
+            <svg width="${img_width}" height="${img_height}">
+                ${svgElements}
+            </svg>
+        `;
+
+        let img = sharp(image);
+
+        img = img.composite([{
+            input: Buffer.from(svgImage),
+            blend: 'over'
+        }]);
+
+        const bufferWithBoundingBoxes = await img.jpeg().toBuffer();
+
+        const base64ImageWithBoundingBoxes = bufferWithBoundingBoxes.toString('base64');
+
+        return { result, image: base64ImageWithBoundingBoxes, countClasses };
     } catch (error) {
         console.error('Error processing image:', error);
         throw error;

@@ -1,22 +1,25 @@
 const crypto = require('crypto');
 const { predictImageSegmentation } = require('../services/inferenceService');
-const InputError = require('../exceptions/InputError'); // Assuming InputError is defined in exceptions
+const costPrediction = require('../services/costPrediction')
+const InputError = require('../exceptions/InputError');
+const { loadObjectDetectionModel, loadRegressionModel } = require("../services/loadModel");
 
 
 async function postPredictHandler(request, h) {
     const { image } = request.payload;
-    const { model } = request.server.app;
+    const { objectDetectionModel, regressionModel  } = request.server.app.models;
 
     try {
-        console.log('Processing image...');
-        const result = await predictImageSegmentation(model, image);
-        
+        const { result, image: base64ImageWithBoundingBoxes, countClasses } = await predictImageSegmentation(objectDetectionModel, image);
+        const finalCost =  await costPrediction(regressionModel, countClasses);
         const id = crypto.randomUUID();
         const createdAt = new Date().toISOString();
 
         const data = {
             id: id,
+            finalCost: finalCost,
             result: result,
+            image: base64ImageWithBoundingBoxes, // Include the base64 string in the response
             createdAt: createdAt,
         };
 
